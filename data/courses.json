@@ -1,0 +1,14 @@
+[
+  {
+    "courseId": "acs-frb-26",
+    "name": "ACS FRB-26",
+    "description": "Final revision batch",
+    "isPublicCatalog": true
+  },
+  {
+    "courseId": "mystudytracker",
+    "name": "MyStudyTracker",
+    "description": "Legacy compatibility",
+    "isPublicCatalog": true
+  }
+]
