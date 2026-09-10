@@ -1,0 +1,6 @@
+{
+  "name": "Bunny CDN Authenticated Video Player & API",
+  "description": "Secure authenticated Bunny CDN HLS playback architecture with backend token signing, Firebase Auth integration, and Blogger template exporter.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
