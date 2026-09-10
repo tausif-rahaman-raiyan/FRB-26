@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
+import csrf from "csurf";
 import { env } from "./config/env.js";
 import authRoutes from "./routes/auth.js";
 import playbackRoutes from "./routes/playback.js";
@@ -20,6 +21,20 @@ app.use(
 );
 app.use(cookieParser());
 app.use(express.json({ limit: "1mb" }));
+
+const csrfProtection = csrf({
+  cookie: {
+    key: "frb26_csrf_secret",
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: env.sessionCookieSameSite,
+  },
+});
+
+app.use((req, res, next) => {
+  if (req.path === "/api/auth/session/login") return next();
+  return csrfProtection(req, res, next);
+});
 
 app.get("/api/health", (_req, res) => {
   res.json({

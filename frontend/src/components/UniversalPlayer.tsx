@@ -9,6 +9,7 @@ import { getCourseId, loadVideoProgress, requestPlaybackAuthorization, saveVideo
 import type { User } from "../firebase";
 
 interface UniversalPlayerProps {
+  key?: string;
   video: FlatVideoItem | null;
   user: User | null;
   onMarkWatched: (videoId: string) => void;

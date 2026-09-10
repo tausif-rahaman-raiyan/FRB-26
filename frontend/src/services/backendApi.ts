@@ -16,6 +16,16 @@ async function parseJsonSafe<T>(res: Response): Promise<T | null> {
   }
 }
 
+function getCsrfTokenFromCookie() {
+  const match = document.cookie.match(/(?:^|; )frb26_csrf=([^;]+)/);
+  return match ? decodeURIComponent(match[1]) : "";
+}
+
+function secureJsonHeaders() {
+  const csrf = getCsrfTokenFromCookie();
+  return csrf ? { "Content-Type": "application/json", "x-csrf-token": csrf } : { "Content-Type": "application/json" };
+}
+
 export async function loginWithFirebaseIdToken(idToken: string) {
   const res = await fetch(`${API_BASE}/api/auth/session/login`, {
     method: "POST",
@@ -30,6 +40,7 @@ export async function logoutBackendSession() {
   await fetch(`${API_BASE}/api/auth/session/logout`, {
     method: "POST",
     credentials: "include",
+    headers: secureJsonHeaders(),
   });
 }
 
@@ -37,7 +48,7 @@ export async function requestPlaybackAuthorization(videoId: string, courseId = C
   const res = await fetch(`${API_BASE}/api/video/playback`, {
     method: "POST",
     credentials: "include",
-    headers: { "Content-Type": "application/json" },
+    headers: secureJsonHeaders(),
     body: JSON.stringify({ courseId, videoId }),
   });
   const data = await parseJsonSafe<PlaybackAuthResponse>(res);
@@ -81,7 +92,7 @@ export async function saveVideoProgress(params: {
   await fetch(`${API_BASE}/api/progress/${courseId}/${videoId}`, {
     method: "PUT",
     credentials: "include",
-    headers: { "Content-Type": "application/json" },
+    headers: secureJsonHeaders(),
     body: JSON.stringify({ type, position, duration, completed }),
   });
 }

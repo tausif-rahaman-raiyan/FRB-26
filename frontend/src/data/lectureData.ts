@@ -782,9 +782,10 @@ export const getVideoId = (url: string): string => {
     const urlObj = new URL(clean);
     let videoId = null;
 
-    if (urlObj.hostname === 'youtu.be') {
+    const normalizedHost = urlObj.hostname.toLowerCase();
+    if (normalizedHost === 'youtu.be') {
       videoId = urlObj.pathname.replace(/^\//, '').split('/')[0];
-    } else if (urlObj.hostname.includes('youtube.com')) {
+    } else if (normalizedHost === 'youtube.com' || normalizedHost === 'www.youtube.com' || normalizedHost.endsWith('.youtube.com')) {
       videoId = urlObj.searchParams.get('v');
 
       if (!videoId) {
