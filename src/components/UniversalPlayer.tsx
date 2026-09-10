@@ -108,28 +108,153 @@ export function UniversalPlayer({
       }
     }
 
-    const res = await fetch('/api/video/playback', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${idToken}`,
-      },
-      body: JSON.stringify({
-        videoId: getVideoId(videoTargetUrl),
-        courseId: 'acs-frb-26',
-        videoPath: videoTargetUrl,
-      }),
-    });
+    try {
+      const res = await fetch('/api/video/playback', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({
+          videoId: getVideoId(videoTargetUrl),
+          courseId: 'acs-frb-26',
+          videoPath: videoTargetUrl,
+        }),
+      });
 
-    const data: PlaybackAuthResponse = await res.json();
-    if (!res.ok || !data.success) {
-      throw new Error(data.message || 'Authorization failed from backend.');
+      const rawText = await res.text();
+      let data: PlaybackAuthResponse | null = null;
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        console.warn('Backend returned non-JSON response:', rawText.slice(0, 120));
+      }
+
+      if (!res.ok || !data || !data.success) {
+        const errorMsg =
+          data?.message ||
+          data?.error ||
+          `Backend authorization error (Status ${res.status}).`;
+        throw new Error(errorMsg);
+      }
+      return data;
+    } catch (err: any) {
+      console.warn('Authorization request issue:', err.message);
+      throw err;
     }
-    return data;
+  }
+
+  // Mount and initialize HLS.js and Plyr
+  function mountHlsStream(streamUrl: string, media: HTMLVideoElement, fallbackUrl: string) {
+    if (Hls.isSupported()) {
+      const hls = new Hls({
+        xhrSetup: (xhr) => {
+          xhr.withCredentials = false;
+        },
+        enableWorker: true,
+        lowLatencyMode: false,
+      });
+      hlsRef.current = hls;
+
+      hls.loadSource(streamUrl);
+      hls.attachMedia(media);
+
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        const availableQualities = hls.levels.map((l) => l.height);
+        availableQualities.unshift(0);
+
+        plyrRef.current = new Plyr(media, {
+          controls: [
+            'play-large',
+            'play',
+            'progress',
+            'current-time',
+            'duration',
+            'captions',
+            'settings',
+            'fullscreen',
+          ],
+          settings: ['captions', 'quality', 'speed'],
+          speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] },
+          quality: {
+            default: 0,
+            options: availableQualities,
+            forced: true,
+            onChange: (qualityHeight: number) => {
+              if (qualityHeight === 0) hls.currentLevel = -1;
+              else hls.currentLevel = hls.levels.findIndex((l) => l.height === qualityHeight);
+            },
+          },
+          i18n: { qualityLabel: { 0: 'Auto' } },
+        });
+
+        media.play().catch(() => {});
+      });
+
+      // 403 / 401 token refresh handler
+      hls.on(Hls.Events.ERROR, async (_event, data) => {
+        if (data.fatal) {
+          const code = data.response?.code;
+          if ((code === 403 || code === 401) && retryCountRef.current < 2) {
+            retryCountRef.current += 1;
+            try {
+              const refreshed = await requestBackendAuthorization(fallbackUrl);
+              if (refreshed.playbackUrl) {
+                hls.loadSource(refreshed.playbackUrl);
+                hls.startLoad();
+                return;
+              }
+            } catch {
+              setPlayerState({
+                loading: false,
+                error: 'Bunny CDN token expired or unauthorized. Please verify your BUNNY_SECURITY_TOKEN_KEY in Vercel.',
+                errorType: 'TOKEN_EXPIRED',
+              });
+              hls.destroy();
+              return;
+            }
+          }
+
+          switch (data.type) {
+            case Hls.ErrorTypes.NETWORK_ERROR:
+              if (retryCountRef.current < 2) {
+                retryCountRef.current += 1;
+                hls.startLoad();
+              } else {
+                setPlayerState({
+                  loading: false,
+                  error: 'Network connection issue or stream restricted (HTTP 403). Please verify your internet and CDN settings.',
+                  errorType: 'NETWORK_ERROR',
+                });
+                hls.destroy();
+              }
+              break;
+            case Hls.ErrorTypes.MEDIA_ERROR:
+              hls.recoverMediaError();
+              break;
+            default:
+              setPlayerState({
+                loading: false,
+                error: 'Unable to stream this video. Please try again later.',
+                errorType: 'PLAYBACK_ERROR',
+              });
+              hls.destroy();
+              break;
+          }
+        }
+      });
+    } else if (media.canPlayType('application/vnd.apple.mpegurl')) {
+      media.src = streamUrl;
+      plyrRef.current = new Plyr(media, {
+        settings: ['captions', 'speed'],
+        speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] },
+      });
+      media.play().catch(() => {});
+    }
   }
 
   // Play Bunny HLS Video with Signed Token
-  async function playAuthenticatedBunnyVideo(videoTarget: FlatVideoItem) {
+  async function playAuthenticatedBunnyVideo(videoTarget: FlatVideoItem, forceDirect = false) {
     const media = videoRef.current;
     if (!media || !videoTarget) return;
 
@@ -155,125 +280,23 @@ export function UniversalPlayer({
 
     setPlayerState({ loading: true, error: null, errorType: null });
 
-    try {
-      const clean = cleanUrl(videoTarget.url);
-      const authResult = await requestBackendAuthorization(clean);
-      const authorizedUrl = authResult.playbackUrl || clean;
+    const clean = cleanUrl(videoTarget.url);
+    let streamUrl = clean;
 
-      setPlayerState({ loading: false, error: null, errorType: null });
-
-      if (Hls.isSupported()) {
-        const hls = new Hls({
-          xhrSetup: (xhr) => {
-            xhr.withCredentials = false;
-          },
-          enableWorker: true,
-          lowLatencyMode: false,
-        });
-        hlsRef.current = hls;
-
-        hls.loadSource(authorizedUrl);
-        hls.attachMedia(media);
-
-        hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          const availableQualities = hls.levels.map((l) => l.height);
-          availableQualities.unshift(0);
-
-          plyrRef.current = new Plyr(media, {
-            controls: [
-              'play-large',
-              'play',
-              'progress',
-              'current-time',
-              'duration',
-              'captions',
-              'settings',
-              'fullscreen',
-            ],
-            settings: ['captions', 'quality', 'speed'],
-            speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] },
-            quality: {
-              default: 0,
-              options: availableQualities,
-              forced: true,
-              onChange: (qualityHeight: number) => {
-                if (qualityHeight === 0) hls.currentLevel = -1;
-                else hls.currentLevel = hls.levels.findIndex((l) => l.height === qualityHeight);
-              },
-            },
-            i18n: { qualityLabel: { 0: 'Auto' } },
-          });
-
-          media.play().catch(() => {});
-        });
-
-        // 403 / 401 token refresh handler
-        hls.on(Hls.Events.ERROR, async (_event, data) => {
-          if (data.fatal) {
-            const code = data.response?.code;
-            if ((code === 403 || code === 401) && retryCountRef.current < 2) {
-              retryCountRef.current += 1;
-              try {
-                const refreshed = await requestBackendAuthorization(clean);
-                if (refreshed.playbackUrl) {
-                  hls.loadSource(refreshed.playbackUrl);
-                  hls.startLoad();
-                  return;
-                }
-              } catch {
-                setPlayerState({
-                  loading: false,
-                  error: 'Playback authorization expired. Please reload the class.',
-                  errorType: 'TOKEN_EXPIRED',
-                });
-                hls.destroy();
-                return;
-              }
-            }
-
-            switch (data.type) {
-              case Hls.ErrorTypes.NETWORK_ERROR:
-                if (retryCountRef.current < 2) {
-                  retryCountRef.current += 1;
-                  hls.startLoad();
-                } else {
-                  setPlayerState({
-                    loading: false,
-                    error: 'Network connection issue while loading class stream. Please check your internet.',
-                    errorType: 'NETWORK_ERROR',
-                  });
-                  hls.destroy();
-                }
-                break;
-              case Hls.ErrorTypes.MEDIA_ERROR:
-                hls.recoverMediaError();
-                break;
-              default:
-                setPlayerState({
-                  loading: false,
-                  error: 'Unable to stream this video. Please try again later.',
-                  errorType: 'PLAYBACK_ERROR',
-                });
-                hls.destroy();
-                break;
-            }
-          }
-        });
-      } else if (media.canPlayType('application/vnd.apple.mpegurl')) {
-        media.src = authorizedUrl;
-        plyrRef.current = new Plyr(media, {
-          settings: ['captions', 'speed'],
-          speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] },
-        });
-        media.play().catch(() => {});
+    if (!forceDirect) {
+      try {
+        const authResult = await requestBackendAuthorization(clean);
+        if (authResult.playbackUrl) {
+          streamUrl = authResult.playbackUrl;
+        }
+      } catch (authErr: any) {
+        console.warn('Backend authorization failed, trying direct stream:', authErr.message);
+        streamUrl = clean;
       }
-    } catch (err: any) {
-      setPlayerState({
-        loading: false,
-        error: err.message || 'Authorization failed. Please try again.',
-        errorType: 'AUTH_ERROR',
-      });
     }
+
+    setPlayerState({ loading: false, error: null, errorType: null });
+    mountHlsStream(streamUrl, media, clean);
   }
 
   // Trigger HLS play on video or user change
@@ -447,12 +470,21 @@ export function UniversalPlayer({
               <LogIn className="w-4 h-4" /> Sign In with Google
             </button>
           ) : (
-            <button
-              onClick={() => playAuthenticatedBunnyVideo(video)}
-              className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-slate-700 px-5 py-2.5 rounded-xl font-semibold text-xs sm:text-sm transition-all active:scale-95"
-            >
-              <RefreshCw className="w-4 h-4" /> Retry Stream
-            </button>
+            <div className="flex flex-wrap items-center justify-center gap-2.5">
+              <button
+                onClick={() => playAuthenticatedBunnyVideo(video, false)}
+                className="flex items-center gap-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white px-5 py-2.5 rounded-xl font-bold text-xs sm:text-sm shadow-lg transition-all active:scale-95"
+              >
+                <RefreshCw className="w-4 h-4" /> Retry Stream
+              </button>
+              <button
+                onClick={() => playAuthenticatedBunnyVideo(video, true)}
+                className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 px-4 py-2.5 rounded-xl font-semibold text-xs sm:text-sm transition-all active:scale-95"
+                title="Attempt playing directly without token authorization"
+              >
+                <Play className="w-4 h-4" /> Try Direct Stream
+              </button>
+            </div>
           )}
         </div>
       )}

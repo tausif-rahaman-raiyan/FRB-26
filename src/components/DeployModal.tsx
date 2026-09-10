@@ -36,7 +36,13 @@ export function DeployModal({ isOpen, onClose }: DeployModalProps) {
           videoPath: testUrl,
         }),
       });
-      const data = await res.json();
+      const rawText = await res.text();
+      let data: any;
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        data = rawText;
+      }
       setTestResult({ status: res.status, ok: res.ok, data });
     } catch (err: any) {
       setTestResult({ status: 500, ok: false, error: err.message });

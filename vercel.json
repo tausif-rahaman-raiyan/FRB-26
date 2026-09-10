@@ -1,23 +1,14 @@
 {
-  "version": 2,
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "routes": [
+  "rewrites": [
     {
-      "src": "/api/(.*)",
-      "dest": "/api/$1"
+      "source": "/api/(.*)",
+      "destination": "/api/$1"
     },
     {
-      "handle": "filesystem"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/index.html"
+      "source": "/(.*)",
+      "destination": "/index.html"
     }
-  ],
-  "env": {
-    "BUNNY_CDN_HOSTNAME": "@bunny_cdn_hostname",
-    "BUNNY_TOKEN_SECURITY_KEY": "@bunny_token_security_key",
-    "ALLOWED_ORIGINS": "@allowed_origins"
-  }
+  ]
 }
